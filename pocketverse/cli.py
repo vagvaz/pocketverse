@@ -111,6 +111,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         cmd = None
 
     try:
+        if args.detach:
+            from .sessionctl import run_detached
+            return run_detached(cfg, args.config, session_id, cmd)
         return launcher.run_sandbox(
             cfg,
             session_id=session_id,
@@ -119,6 +122,37 @@ def cmd_run(args: argparse.Namespace) -> int:
             continue_from=args.continue_from,
         )
     except (FileNotFoundError, ValidationError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+
+def cmd_attach(args: argparse.Namespace) -> int:
+    cfg = _load_config_or_exit(args.config)
+    try:
+        from .sessionctl import attach
+        return attach(cfg, args.session)
+    except (FileNotFoundError, RuntimeError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+
+def cmd_detach(args: argparse.Namespace) -> int:
+    cfg = _load_config_or_exit(args.config)
+    try:
+        from .sessionctl import detach
+        return detach(cfg, args.session)
+    except (FileNotFoundError, RuntimeError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+
+def cmd_exec(args: argparse.Namespace) -> int:
+    cfg = _load_config_or_exit(args.config)
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    try:
+        from .sessionctl import exec_command
+        return exec_command(cfg, args.session, command)
+    except (FileNotFoundError, RuntimeError, ValueError, TimeoutError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
@@ -433,6 +467,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the would-be unshare command and exit",
     )
     p_run.add_argument(
+        "--detach", action="store_true",
+        help="Run inside a persistent tmux session and return immediately",
+    )
+    p_run.add_argument(
         "--continue-from", default=None,
         help="Session id to continue (worktree branch advance / overlay chain)",
     )
@@ -441,6 +479,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Command and arguments (separate with --)",
     )
     p_run.set_defaults(func=cmd_run)
+
+    # --- attach/detach/exec ---
+    for name, handler, help_text in (
+        ("attach", cmd_attach, "Attach to a detached session"),
+        ("detach", cmd_detach, "Detach clients without stopping a session"),
+    ):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("-c", "--config", default="pocketverse.yaml", type=Path)
+        p.add_argument("--session", required=True)
+        p.set_defaults(func=handler)
+
+    p_exec = sub.add_parser("exec", help="Run a command in a detached session")
+    p_exec.add_argument("-c", "--config", default="pocketverse.yaml", type=Path)
+    p_exec.add_argument("--session", required=True)
+    p_exec.add_argument("command", nargs=argparse.REMAINDER)
+    p_exec.set_defaults(func=cmd_exec)
 
     # --- diff ---
     p_diff = sub.add_parser("diff", help="Show changes from a session")

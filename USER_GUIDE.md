@@ -174,21 +174,34 @@ $ git log session-<planner-sid> session-<a-sid> ...
 
 ## Scenario 5: Human attaches to guide a running agent
 
-Run the agent under tmux with its socket in the session sock dir:
-
-```yaml
-agent:
-  type: claude-code
-command: ["tmux", "-S", "/run/pocketverse/tmux.sock", "new-session", "claude"]
-```
-
-Then attach from another terminal:
+Start a persistent detached session:
 
 ```console
-$ pocket run -c cfg -- tmux -S /run/pocketverse/tmux.sock attach
+$ pocket run -c cfg --detach -- claude
+session: <session-id>
 ```
 
-(`Ctrl-B D` to detach — the agent keeps running.)
+Attach from another terminal:
+
+```console
+$ pocket attach -c cfg --session <session-id>
+```
+
+Use tmux's normal detach shortcut (`Ctrl-B`, then `D`) or:
+
+```console
+$ pocket detach -c cfg --session <session-id>
+```
+
+The sandbox continues running after detaching. Run a one-off command in the
+same namespaces with:
+
+```console
+$ pocket exec -c cfg --session <session-id> -- env
+```
+
+Detached sessions require `tmux` on the host and inside the sandbox
+userland.
 
 ## Scenario 6: Agent continues another agent's work
 

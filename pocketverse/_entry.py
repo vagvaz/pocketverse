@@ -156,7 +156,7 @@ def build_bwrap_argv(entry: dict, overlays: list[dict], pkg_parent: str) -> list
     # forwards are configured the in-sandbox unishim sockets (and ports.json)
     # live there too.  Both ride the same bind-mounted dir at /run/pocketverse.
     ports: list[dict] = entry.get("ports") or []
-    if net_mode == "allowlist" or ports:
+    if net_mode == "allowlist" or ports or entry.get("sock_dir_host"):
         sock_dir_host: str | None = entry.get("sock_dir_host")
         if sock_dir_host:
             argv.extend(["--bind", sock_dir_host, "/run/pocketverse"])

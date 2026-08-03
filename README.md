@@ -311,6 +311,19 @@ Run a sandbox session.  Prints the session ID to stderr before launching.
 The command after `--` overrides the config's `command`.  With `--dry-run`,
 prints the would-be `unshare` command and exits.
 
+Use `--detach` to keep the sandbox running in a persistent tmux session:
+
+```console
+$ pocket run -c CONFIG --detach -- bash
+$ pocket attach -c CONFIG --session ID
+$ pocket exec -c CONFIG --session ID -- sh -c 'printf hello'
+$ pocket detach -c CONFIG --session ID
+```
+
+Detached control requires `tmux` on the host and inside the sandbox
+userland. `detach` disconnects clients without stopping the sandbox;
+`exec` creates a temporary tmux window and returns the command exit status.
+
 ### `pocket diff`
 
 ```
@@ -401,3 +414,28 @@ supervisor for a new agent:
 pocket mailbox-send supervisor -c pocketverse.yaml --type spawn_request \
   --payload '{"sender":"human","goal":"write tests for state.py"}'
 ```
+
+## Telemetry and session events
+
+Every session writes durable JSONL events to
+`<state_dir>/<name>/session-<id>/events.jsonl`. Events include session
+preparation, sandbox start/finish, and shutdown. This local record requires
+no extra dependencies.
+
+Optional OpenTelemetry traces/logs can be enabled with:
+
+```yaml
+telemetry:
+  enabled: true
+  service_name: pocketverse
+  export_logs: true
+  export_traces: true
+  export_metrics: false
+```
+
+Install the optional dependencies with `pip install -e '.[telemetry]'`.
+Configure the OTLP destination using standard variables such as
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, and
+`OTEL_EXPORTER_OTLP_HEADERS`. A collector at OTLP gRPC `:4317` or HTTP
+`:4318` is recommended. If the SDK is unavailable, local JSONL continues to
+work.

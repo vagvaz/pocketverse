@@ -98,6 +98,7 @@ from pathlib import Path
 
 import pocketverse
 from . import agents
+from . import telemetry
 from .models import AgentType, Mount, MountMode, SandboxConfig
 from .state import Session, SESSION_PREFIX, record_overlay_updates, record_worktrees
 
@@ -253,6 +254,7 @@ def run_sandbox(
     cmd: list[str] | None = None,
     dry_run: bool = False,
     continue_from: str | None = None,
+    tmux_session: bool = False,
 ) -> int:
     """Run the sandbox; return the sandboxed command's exit code.
 
@@ -322,6 +324,12 @@ def run_sandbox(
     # 1. Create session dirs
     from . import state  # lane 3 owns this; assume it works
     sess: Session = state.new_session(cfg, session_id)
+    telemetry_session = telemetry.start_session(sess.id, sess.root, cfg.telemetry)
+    telemetry_session.emit_event("session_prepared", attributes={
+        "config": cfg.name,
+        "network_mode": cfg.network.mode.value,
+        "agent_type": cfg.agent.type.value,
+    })
 
     # 1b. Continuation hints from the parent session (if any), then
     #     per-session git worktrees + overlay lower chaining/compaction.
@@ -352,6 +360,18 @@ def run_sandbox(
          "overlays": [],
      }
 
+    if tmux_session:
+        base_command = list(cmd if cmd is not None else cfg.command)
+        # Start tmux detached (no controlling terminal exists in the server
+        # process), then keep this foreground wrapper alive until the tmux
+        # session exits so bwrap's parent/death lifecycle remains intact.
+        cmd = ["sh", "-c",
+               "tmux -S /run/pocketverse/tmux.sock new-session -d -s pocket -- \"$@\"; "
+               "while tmux -S /run/pocketverse/tmux.sock has-session -t pocket 2>/dev/null; "
+               "do sleep 1; done",
+               "pocket-tmux", *base_command]
+        entry["command"] = cmd
+
     if cfg.agent.type is not AgentType.SHELL:
         entry["agent_home"] = agents.AGENT_HOME
 
@@ -375,7 +395,7 @@ def run_sandbox(
     child_procs: list[subprocess.Popen] = []
     proxy_proc: subprocess.Popen | None = None
 
-    if cfg.network.mode == "allowlist" or cfg.ports:
+    if cfg.network.mode == "allowlist" or cfg.ports or tmux_session:
         # The sock dir is bind-mounted at /run/pocketverse inside the sandbox
         # so the in-sandbox shim/unishim processes can reach the host relays.
         entry["sock_dir_host"] = str(sess.sock_dir)
@@ -444,6 +464,11 @@ def run_sandbox(
     entry_json.parent.mkdir(parents=True, exist_ok=True)
     entry_json.write_text(json.dumps(entry, indent=2))
 
+    if tmux_session:
+        (sess.root / "run.json").write_text(json.dumps({
+            "session_id": sess.id, "pid": os.getpid(), "started": time.time(),
+        }))
+
     # 7. Launch unshare (optionally wrapped in prlimit for resource limits)
     unshare_cmd: list[str] = build_unshare_command(entry_json)
     launch_cmd: list[str] = [*_prlimit_prefix(cfg), *unshare_cmd]
@@ -451,7 +476,10 @@ def run_sandbox(
     proc: subprocess.Popen | None = None
     try:
         proc = subprocess.Popen(launch_cmd)
+        telemetry_session.emit_event(
+            "sandbox_started", attributes={"pid": getattr(proc, "pid", None)})
         returncode = proc.wait()
+        telemetry_session.emit_event("sandbox_finished", attributes={"exit_code": returncode})
         return returncode
     except KeyboardInterrupt:
         if proc is not None:
@@ -461,6 +489,12 @@ def run_sandbox(
     finally:
         if child_procs:
             _terminate_procs(child_procs)
+        if tmux_session:
+            try:
+                (sess.root / "run.json").unlink()
+            except FileNotFoundError:
+                pass
+        telemetry.end_session(telemetry_session)
 
 
 # ---------------------------------------------------------------------------

@@ -342,6 +342,32 @@ class LLMConfig(BaseModel):
     base_url: str | None = None
 
 
+class TelemetryConfig(BaseModel):
+    """Optional telemetry settings (pocketverse.telemetry).
+
+    The local JSONL layer (``<session.root>/events.jsonl``) always runs and
+    needs no dependencies. Setting ``enabled: true`` additionally wires up
+    OpenTelemetry traces/logs/metrics when the optional ``[telemetry]`` extra
+    is installed; if the SDK is absent it is a silent no-op. OTLP exporters
+    honour the standard ``OTEL_*`` environment variables.
+    """
+
+    enabled: bool = False
+    """Wire up OpenTelemetry. Local JSONL runs regardless."""
+
+    service_name: str = "pocketverse"
+    """``service.name`` resource attribute; overridden by OTEL_SERVICE_NAME."""
+
+    export_logs: bool = True
+    """Mirror events to OpenTelemetry logs."""
+
+    export_traces: bool = True
+    """Emit OpenTelemetry spans (see telemetry.start_span)."""
+
+    export_metrics: bool = False
+    """Enable a meter provider with an OTLP metric reader."""
+
+
 class SandboxConfig(BaseModel):
     version: int = 1
     name: str = "default"
@@ -353,6 +379,7 @@ class SandboxConfig(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     supervisor: SupervisorConfig = Field(default_factory=SupervisorConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     env: dict[str, str] = Field(default_factory=dict)
     """Extra environment variables. Values undergo shell-style expansion on the host,
     so '${ANTHROPIC_API_KEY}' passes the host value through."""
