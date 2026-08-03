@@ -1,0 +1,155 @@
+# pocketverse.yaml — annotated example configuration for an AI coding agent
+# ===========================================================================
+# pocket is the CLI entry point.  Run `pocket init` to create this file.
+# Then edit it to match your environment, and launch the sandbox with:
+#
+#     pocket run [-c pocketverse.yaml] [--session custom-id] [-- CMD...]
+#     pocket diff ...
+#     pocket apply ...
+#
+# See `pocket validate` to check the config before running.
+
+# Schema version (currently 1).
+version: 1
+
+# Human-readable name used as a subdirectory under state_dir.
+name: ai-agent
+
+# ---------------------------------------------------------------------------
+# Mounts — host directories composed into the sandbox filesystem.
+# Each entry has:
+#   path   - host path (tilded/ENV-var expanded)
+#   target - path inside the sandbox (defaults to same as path)
+#   mode   - ro | rw | overlay
+#
+# ro:       read-only bind mount (kernel-enforced)
+# rw:       read-write bind mount (changes hit the host immediately)
+# overlay:  copy-on-write via overlayfs + userxattr (kernel >= 5.11).
+#           Writes land in the session upper dir and can be diffed/applied.
+# ---------------------------------------------------------------------------
+mounts:
+  # Workspace directory as an OVERLAY so all changes are tracked.
+  - path: /home/user/code/my-project
+    target: /workspace
+    mode: overlay
+    # Optional: back the overlay with a per-session GIT WORKTREE instead.
+    # A session branch (session-<id>) is created; the agent's commits land
+    # in the real repo (its git dir is rw-bound in). Review = git log,
+    # merge = git merge session-<id>; diff/apply handle uncommitted
+    # leftovers and target the worktree.
+    # worktree:
+    #   repo: /home/user/code/my-project   # defaults to the mount path
+    #   branch: auto                        # or an explicit branch name
+
+  # A reference checkout read-only.
+  - path: /home/user/repos/some-lib
+    target: /reference
+    mode: ro
+
+# ---------------------------------------------------------------------------
+# Shared directory — a LIVE read-write bind shared across concurrent
+# sandboxes (and the host).  Changes appear immediately on the host; this is
+# the inter-agent exchange channel.  NOT covered by `pocket diff`/`pocket
+# apply` — use overlay mounts for gated, reviewable work.  The directory is
+# created on the host at launch if missing.
+# ---------------------------------------------------------------------------
+# shared:
+#   path: /home/user/shared/agents   # host dir (created if missing)
+#   target: /shared                  # path inside the sandbox (default)
+
+# ---------------------------------------------------------------------------
+# Resource limits — wraps the whole sandbox in prlimit(1) (util-linux).
+# RLIMITs are inherited across fork/exec, so these cap bwrap, the shim, and
+# the agent inside the sandbox.  All fields optional; `core` defaults to 0.
+# NOTE: `processes` (RLIMIT_NPROC) counts against your real uid across the
+# WHOLE desktop — too low a value breaks forking everywhere, not just here.
+# ---------------------------------------------------------------------------
+# limits:
+#   cpu: 600            # RLIMIT_CPU — total CPU seconds before SIGXCPU
+#   memory: 4G          # RLIMIT_AS — per-process address space ('4G'/'512M')
+#   file_size: 1G       # RLIMIT_FSIZE — max created file size
+#   open_files: 4096    # RLIMIT_NOFILE — max open file descriptors
+#   # processes: 512    # RLIMIT_NPROC — per real uid (see caveat above)
+#   core: 0             # RLIMIT_CORE — 0 disables core dumps
+
+# ---------------------------------------------------------------------------
+# LLM endpoint override (mechanism only — no proxy/metering here)
+#   Route background agents through a different base URL (e.g. a
+#   rate-limited lane) while humans keep the provider default. Sets
+#   ANTHROPIC_BASE_URL + OPENAI_BASE_URL inside the sandbox (env: wins).
+#   Remote endpoints also need their domain in network.allow below.
+# ---------------------------------------------------------------------------
+# llm:
+#   base_url: http://127.0.0.1:8317
+
+# ---------------------------------------------------------------------------
+# Network
+#   mode: full | allowlist | none
+#     full:      share host network (no isolation — bypass the proxy).
+#     allowlist: only the domain-allowlist forward proxy is reachable.
+#                The sandbox runs in --unshare-net; the proxy socket is
+#                bind-mounted in and an in-sandbox shim exposes it as
+#                127.0.0.1:3128.  HTTP_PROXY/HTTPS_PROXY are set automatically.
+#     none:      fresh network namespace with loopback only.
+# ---------------------------------------------------------------------------
+network:
+  mode: allowlist
+  # Domain rules for allowlist mode:
+  allow:
+    - "api.anthropic.com"
+    # - "api.openai.com"
+    # - "*.github.com"
+    # - "pypi.org:443"
+  # Port the in-sandbox relay listens on (default 3128).
+#   port: 3128
+  # Upstream ports the proxy may connect to (unless a rule pins one).
+  # allow_ports: [443, 80]
+
+# ---------------------------------------------------------------------------
+# Port forwards — publish sandbox TCP ports on the HOST loopback, so the host
+# (or other tools) can reach the agent's dev server.
+#   target - port the agent listens on inside the sandbox (127.0.0.1)
+#   host   - host port on 127.0.0.1; omit/null for a free auto-allocated port
+#   name   - optional; if set, the host port is injected into the sandbox
+#            environment as POCKET_PORT_<NAME> (uppercased)
+# Works in EVERY network mode (the relay pair crosses the private netns over a
+# bind-mounted unix socket, like the allowlist proxy).
+# ---------------------------------------------------------------------------
+# ports:
+#   - target: 3000
+#     name: web          # -> POCKET_PORT_WEB inside the sandbox
+#   - target: 8080
+#     host: 18080        # pin a host port instead of auto-allocating
+
+# ---------------------------------------------------------------------------
+# Environment variables.
+# Values undergo shell-style expansion on the host, so a value of
+# "${ANTHROPIC_API_KEY}" passes the host environment variable through.
+# ---------------------------------------------------------------------------
+env:
+  ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+  # OPENAI_API_KEY:   "${OPENAI_API_KEY}"
+
+# Working directory inside the sandbox (must be under a mount target or /tmp).
+workdir: /workspace
+
+# Default command (can be overridden on the CLI with `pocket run -- <cmd>`).
+command: ["bash"]
+
+# Directory for session state (overlay uppers, proxy socket, metadata).
+# Created relative to CWD if relative.
+state_dir: .pocket/state
+
+# ---------------------------------------------------------------------------
+# Isolation tuning (defaults shown)
+# ---------------------------------------------------------------------------
+# isolation:
+#   die_with_parent: true
+#   new_session: true
+#   unshare_pid: true
+#   unshare_ipc: true
+#   unshare_uts: true
+#   hostname: pocket
+#   clearenv: true          # bwrap --clearenv (empty env inside sandbox)
+#   system_dirs: true       # ro-bind /usr /bin /sbin /lib /lib64
+#   etc_files: true         # ro-bind /etc/resolv.conf, hosts, ssl, ca-certificates
